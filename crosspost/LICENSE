@@ -1,0 +1,8 @@
+Copyright (c) 2026
+
+This is a private project. All rights reserved.
+
+Portions of this codebase under `uploader/{douyin,bilibili,xiaohongshu,tencent}_uploader/`
+and `utils/` are forked from social-auto-upload
+(https://github.com/dreammis/social-auto-upload) and remain subject to that
+project's license. See the upstream LICENSE file for details.

@@ -78,17 +78,20 @@ async def cmd_publish(args):
         platform, account = spec.split(":", 1)
         targets_spec.append((platform, account))
 
-    extras: dict[str, dict] = {}
+    flat_extras: dict = {}
     if args.extras:
         for piece in args.extras:
-            platform, kv = piece.split(":", 1)
+            if ":" not in piece or "=" not in piece:
+                print(f"bad extra {piece!r}, expected platform:key=value", file=sys.stderr)
+                return 2
+            _platform, kv = piece.split(":", 1)
             k, v = kv.split("=", 1)
-            extras.setdefault(platform, {})[k] = v
+            flat_extras[k] = v
 
-    targets = []
-    for platform, account in targets_spec:
-        uploader = _build_uploader(platform)
-        targets.append(PublishTarget(uploader=uploader, account=account))
+    targets = [
+        PublishTarget(uploader=_build_uploader(platform), account=account)
+        for platform, account in targets_spec
+    ]
 
     master = VideoPost(
         video_path=Path(args.file),
@@ -97,15 +100,8 @@ async def cmd_publish(args):
         tags=[t.strip() for t in (args.tags or "").split(",") if t.strip()],
         cover_path=Path(args.cover) if args.cover else None,
         schedule_at=_parse_schedule(args.schedule),
-        platform_extras={p: e for p, e in extras.items()},
+        platform_extras=flat_extras,
     )
-
-    # Wire per-platform extras into master.platform_extras as a flat dict the
-    # uploader will pick up via .get on its own keys.
-    flat_extras: dict = {}
-    for p, e in extras.items():
-        flat_extras.update(e)
-    master.platform_extras = flat_extras
 
     adapter = _build_adapter(disable_ai=args.no_ai)
     results = await publish(master, targets, adapter=adapter, dry_run=args.dry_run)

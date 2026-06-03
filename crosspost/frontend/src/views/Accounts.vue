@@ -35,9 +35,18 @@ function openLogin(platform) {
   dlgOpen.value = true
 }
 
+const isBili = computed(() => dlgPlatform.value === 'bilibili')
+
 async function beginLogin() {
   if (!dlgAccount.value) {
     ElMessage.warning('请填写账号名')
+    return
+  }
+  if (isBili.value) {
+    // biliup runs as an interactive CLI subprocess and prints its QR to stdout.
+    // We don't have a clean way to stream that through the browser yet; tell
+    // the user to use the CLI for this one.
+    ElMessage.warning('B 站登录需要在终端运行：crosspost login --platform bilibili --account ' + dlgAccount.value)
     return
   }
   dlgStatus.value = 'waiting'
@@ -52,10 +61,10 @@ async function beginLogin() {
 
 function onLoginEvent(msg) {
   if (msg.event === 'qrcode') {
+    // Backend forwards the uploader's qrcode_callback payload verbatim.
+    // All Playwright-based platforms send {image_path, image_data_url}.
     const p = msg.payload || {}
-    // backend sends either a data: URL or a local path. Prefer data URL.
-    dlgQrUrl.value = p.qrcode_data_url || p.qrcode_url || ''
-    if (p.status === 'scanned') dlgStatus.value = 'scanned'
+    dlgQrUrl.value = p.image_data_url || ''
   } else if (msg.event === 'done') {
     dlgStatus.value = msg.success ? 'done' : 'error'
     if (msg.success) {
@@ -106,6 +115,10 @@ function closeDlg() {
         <el-form-item label="账号别名（仅本地标识，可任意取）">
           <el-input v-model="dlgAccount" placeholder="如 main、work_a 等" />
         </el-form-item>
+        <el-alert v-if="isBili" type="warning" :closable="false">
+          B站登录走 biliup 命令行，请改用：
+          <code>crosspost login --platform bilibili --account {{ dlgAccount || '<name>' }}</code>
+        </el-alert>
       </el-form>
 
       <div v-else class="qr-area">
@@ -114,10 +127,9 @@ function closeDlg() {
           <p>正在准备二维码…</p>
         </div>
         <img v-if="dlgQrUrl" :src="dlgQrUrl" class="qr-img" />
-        <p v-if="dlgStatus === 'waiting'">请用 {{ dlgPlatform }} APP 扫码</p>
-        <p v-if="dlgStatus === 'scanned'">✅ 已扫码，等待确认…</p>
-        <p v-if="dlgStatus === 'done'" class="ok">登录成功</p>
-        <p v-if="dlgStatus === 'error'" class="err">登录失败</p>
+        <p v-if="dlgStatus === 'waiting' && dlgQrUrl">请用 {{ dlgPlatform }} APP 扫码登录</p>
+        <p v-if="dlgStatus === 'done'" class="ok">✅ 登录成功</p>
+        <p v-if="dlgStatus === 'error'" class="err">❌ 登录失败</p>
       </div>
 
       <template #footer>

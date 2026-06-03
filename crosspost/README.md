@@ -102,20 +102,46 @@ crosspost publish --file ./demo.mp4 --title "..." --targets douyin:main --dry-ru
 crosspost publish --file ./demo.mp4 --title "..." --targets douyin:main --no-ai
 ```
 
-## 使用：Web API
+## 使用：Web
 
 ```bash
+# 后端
 uvicorn web:app --reload --port 8000
+
+# 前端（dev 模式）
+cd frontend && npm install && npm run dev
+# 打开 http://localhost:5173
+
+# 或者生产模式：前端构建后由后端一并提供
+cd frontend && npm run build
+uvicorn web:app --port 8000
+# 打开 http://localhost:8000
 ```
 
-主要端点：
-- `GET  /api/health`
-- `GET  /api/platforms` — 列出 4 个平台的硬约束
-- `GET  /api/accounts` — 已保存账号
-- `POST /api/publish` — 发布
-- `GET  /api/posts` — 历史记录
+API 端点：
+| 路径 | 用途 |
+|---|---|
+| `GET  /api/health` | 存活探针 |
+| `GET  /api/platforms` | 4 个平台的硬约束（用于前端校验） |
+| `GET  /api/accounts` | 已保存账号 |
+| `POST /api/login/start` + `GET /api/login/stream/{id}` | 登录任务 + SSE QR 流 |
+| `POST /api/uploads` | 多 part 文件上传，返回服务端绝对路径 |
+| `POST /api/publish/start` + `GET /api/publish/stream/{id}` | 发布任务 + SSE 进度流 |
+| `POST /api/publish` | 同步发布（CLI/脚本备用） |
+| `GET  /api/posts` | 历史记录 |
 
-Web 前端（Vue / React）暂未实现，建议作为下一里程碑。
+## 调试：查看登录二维码 callback 的真实字段
+
+不同平台的 `qrcode_callback(payload)` 字段名可能不同。前端 `<img :src="...">` 需要绑到正确的字段。用 `--print-payload` 看：
+
+```bash
+crosspost login --platform douyin --account test --print-payload
+# 扫码时终端会打印每次回调的 dict，例如：
+# === qrcode_callback payload (douyin) ===
+# { "qrcode_url": "data:image/png;base64,...", "status": "waiting" }
+```
+
+把输出贴给 Claude / 修一下 `frontend/src/views/Accounts.vue` 里的 `onLoginEvent`。
 
 ## 测试
 

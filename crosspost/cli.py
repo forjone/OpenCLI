@@ -57,7 +57,12 @@ def _parse_schedule(s: str | None) -> datetime | None:
 
 async def cmd_login(args):
     up = _build_uploader(args.platform)
-    ok = await up.login(args.account)
+    cb = None
+    if args.print_payload:
+        async def cb(payload):  # noqa: E306
+            print(f"=== qrcode_callback payload ({args.platform}) ===")
+            print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+    ok = await up.login(args.account, qrcode_callback=cb)
     print("✅ logged in" if ok else "❌ login failed")
     return 0 if ok else 1
 
@@ -116,6 +121,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_login = sub.add_parser("login", help="Log into one platform (QR code)")
     p_login.add_argument("--platform", required=True, choices=PLATFORMS)
     p_login.add_argument("--account", required=True)
+    p_login.add_argument(
+        "--print-payload",
+        action="store_true",
+        help="Print each qrcode_callback payload as JSON — useful when wiring "
+             "the web frontend's <img src=...> to the correct field.",
+    )
     p_login.set_defaults(func=cmd_login)
 
     p_check = sub.add_parser("check", help="Verify a saved cookie is still valid")

@@ -1,25 +1,33 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchPlatforms, fetchAccounts, doPublish } from '../api.js'
+import { UploadFilled } from '@element-plus/icons-vue'
+import { fetchPlatforms, fetchAccounts, startPublish, subscribePublish, uploadFile } from '../api.js'
 
 const platforms = ref([])
 const accounts = ref([])
 
-const form = ref({
+const form = reactive({
   file: '',
+  fileName: '',
   title: '',
   description: '',
   tags: '',
   cover: '',
+  coverName: '',
   use_ai: true,
   dry_run: false,
   targets: [],                        // [{platform, account}]
   extras: { bilibili: { tid: 21 } },  // {platform: {key: value}}
 })
 
-const results = ref([])
-const busy = ref(false)
+const uploadProgress = ref(0)  // 0..1 for the video upload itself
+const uploading = ref(false)
+
+// publish progress: per "platform:account" key → { stage: 'adapt'|'upload', status: 'pending'|'running'|'done'|'fail', error?, result?, adapted? }
+const progress = ref({})
+const publishing = ref(false)
+let currentES = null
 
 onMounted(async () => {
   platforms.value = await fetchPlatforms()
@@ -33,7 +41,7 @@ const accountsByPlatform = computed(() => {
 })
 
 const needsTid = computed(() =>
-  form.value.targets.some(t => t.platform === 'bilibili')
+  form.targets.some(t => t.platform === 'bilibili')
 )
 
 function addTarget(platform) {
@@ -42,53 +50,151 @@ function addTarget(platform) {
     ElMessage.warning(`先到"账号"页登录 ${platform}`)
     return
   }
-  form.value.targets.push({ platform, account: list[0].name })
+  form.targets.push({ platform, account: list[0].name })
 }
 
 function removeTarget(idx) {
-  form.value.targets.splice(idx, 1)
+  form.targets.splice(idx, 1)
+}
+
+// el-upload uses :http-request to fully take over the upload — we proxy through axios
+async function handleVideoUpload({ file }) {
+  uploading.value = true
+  uploadProgress.value = 0
+  try {
+    const data = await uploadFile(file, p => uploadProgress.value = p)
+    form.file = data.path
+    form.fileName = data.name
+    ElMessage.success(`视频已上传：${data.name}`)
+  } catch (e) {
+    ElMessage.error('上传失败')
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function handleCoverUpload({ file }) {
+  try {
+    const data = await uploadFile(file)
+    form.cover = data.path
+    form.coverName = data.name
+  } catch (e) {
+    ElMessage.error('封面上传失败')
+  }
+}
+
+function key(platform, account) { return `${platform}:${account}` }
+
+function initProgress() {
+  const m = {}
+  for (const t of form.targets) {
+    m[key(t.platform, t.account)] = {
+      platform: t.platform,
+      account: t.account,
+      stage: 'pending',          // pending | adapting | uploading | done | fail
+      adapted: null,             // {title, tags}
+      error: null,
+      result: null,
+    }
+  }
+  progress.value = m
+}
+
+function onPublishEvent(msg) {
+  const k = (msg.platform && msg.account) ? key(msg.platform, msg.account) : null
+
+  if (msg.event === 'adapt_start' && k) progress.value[k].stage = 'adapting'
+  else if (msg.event === 'adapt_done' && k) {
+    progress.value[k].adapted = { title: msg.title, tags: msg.tags }
+  }
+  else if (msg.event === 'upload_start' && k) progress.value[k].stage = 'uploading'
+  else if (msg.event === 'upload_done' && k) {
+    progress.value[k].stage = msg.success ? 'done' : 'fail'
+    progress.value[k].error = msg.error
+  }
+  else if (msg.event === 'results') {
+    for (const r of msg.results) {
+      const kk = key(r.platform, r.account)
+      if (progress.value[kk]) progress.value[kk].result = r
+    }
+  }
+  else if (msg.event === 'error') {
+    ElMessage.error('发布失败：' + msg.message)
+  }
+  else if (msg.event === 'validation_failed') {
+    for (const [k2, errs] of Object.entries(msg.errors || {})) {
+      if (progress.value[k2]) {
+        progress.value[k2].stage = 'fail'
+        progress.value[k2].error = errs.join('; ')
+      }
+    }
+  }
+  else if (msg.event === 'complete') {
+    publishing.value = false
+    currentES?.close()
+  }
 }
 
 async function submit() {
-  if (!form.value.file || !form.value.title) {
-    ElMessage.warning('视频路径和标题都必填')
+  if (!form.file || !form.title) {
+    ElMessage.warning('视频和标题都必填')
     return
   }
-  if (!form.value.targets.length) {
+  if (!form.targets.length) {
     ElMessage.warning('至少选一个发布目标')
     return
   }
-  busy.value = true
+  publishing.value = true
+  initProgress()
   try {
     const payload = {
-      file: form.value.file,
-      title: form.value.title,
-      description: form.value.description,
-      tags: form.value.tags.split(',').map(s => s.trim()).filter(Boolean),
-      cover: form.value.cover || null,
-      targets: form.value.targets,
-      extras: form.value.extras,
-      use_ai: form.value.use_ai,
-      dry_run: form.value.dry_run,
+      file: form.file,
+      title: form.title,
+      description: form.description,
+      tags: form.tags.split(',').map(s => s.trim()).filter(Boolean),
+      cover: form.cover || null,
+      targets: form.targets,
+      extras: form.extras,
+      use_ai: form.use_ai,
+      dry_run: form.dry_run,
     }
-    const data = await doPublish(payload)
-    results.value = data.results
-    ElMessage.success('已提交')
+    const { task_id } = await startPublish(payload)
+    currentES = subscribePublish(task_id, onPublishEvent)
   } catch (e) {
-    ElMessage.error(e.response?.data?.detail || '发布失败')
-  } finally {
-    busy.value = false
+    publishing.value = false
+    ElMessage.error(e.response?.data?.detail || '发布启动失败')
   }
 }
+
+function stageLabel(s) {
+  return ({
+    pending: '等待中', adapting: 'AI 改写中', uploading: '上传中',
+    done: '✅ 完成', fail: '❌ 失败',
+  })[s] || s
+}
+function stageTag(s) {
+  return ({
+    pending: 'info', adapting: 'warning', uploading: 'primary',
+    done: 'success', fail: 'danger',
+  })[s] || 'info'
+}
+
+const progressList = computed(() => Object.values(progress.value))
 </script>
 
 <template>
   <div class="publish">
     <h2>发布</h2>
 
-    <el-form label-position="top" class="form">
-      <el-form-item label="视频文件路径（服务端可访问的绝对路径）" required>
-        <el-input v-model="form.file" placeholder="/path/to/video.mp4" />
+    <el-form label-position="top" class="form" :disabled="publishing">
+      <el-form-item label="视频文件" required>
+        <el-upload :http-request="handleVideoUpload" :show-file-list="false" drag
+                   accept="video/*" :disabled="uploading || publishing">
+          <el-icon class="upload-icon"><UploadFilled /></el-icon>
+          <div v-if="form.fileName" class="filename">已选：{{ form.fileName }}</div>
+          <div v-else class="hint">拖拽或点击选择视频</div>
+        </el-upload>
+        <el-progress v-if="uploading" :percentage="Math.round(uploadProgress * 100)" :stroke-width="6" />
       </el-form-item>
 
       <el-form-item label="母版标题" required>
@@ -103,8 +209,12 @@ async function submit() {
         <el-input v-model="form.tags" placeholder="标签1,标签2,标签3" />
       </el-form-item>
 
-      <el-form-item label="封面路径（可选）">
-        <el-input v-model="form.cover" />
+      <el-form-item label="封面（可选）">
+        <el-upload :http-request="handleCoverUpload" :show-file-list="false"
+                   accept="image/*" :disabled="publishing">
+          <el-button>选择封面</el-button>
+          <span v-if="form.coverName" class="filename">{{ form.coverName }}</span>
+        </el-upload>
       </el-form-item>
 
       <el-form-item label="发布目标">
@@ -136,19 +246,25 @@ async function submit() {
       </el-form-item>
 
       <el-form-item>
-        <el-button type="primary" :loading="busy" @click="submit">发布</el-button>
+        <el-button type="primary" :loading="publishing" @click="submit">发布</el-button>
       </el-form-item>
     </el-form>
 
-    <div v-if="results.length" class="results">
-      <h3>结果</h3>
-      <el-card v-for="r in results" :key="`${r.platform}:${r.account}`" class="result-card">
+    <div v-if="progressList.length" class="results">
+      <h3>进度</h3>
+      <el-card v-for="p in progressList" :key="`${p.platform}:${p.account}`" class="result-card">
         <div class="result-head">
-          <el-tag :type="r.success ? 'success' : 'danger'">{{ r.platform }}:{{ r.account }}</el-tag>
-          <a v-if="r.post_url" :href="r.post_url" target="_blank">查看</a>
+          <span>
+            <el-tag>{{ p.platform }}:{{ p.account }}</el-tag>
+            <el-tag :type="stageTag(p.stage)" class="stage-tag">{{ stageLabel(p.stage) }}</el-tag>
+          </span>
+          <a v-if="p.result?.post_url" :href="p.result.post_url" target="_blank">打开</a>
         </div>
-        <pre v-if="r.error" class="err">{{ r.error }}</pre>
-        <pre v-else>{{ JSON.stringify(r.raw, null, 2) }}</pre>
+        <div v-if="p.adapted" class="adapted">
+          <div><b>改写标题</b>：{{ p.adapted.title }}</div>
+          <div v-if="p.adapted.tags?.length"><b>改写标签</b>：{{ p.adapted.tags.join(', ') }}</div>
+        </div>
+        <pre v-if="p.error" class="err">{{ p.error }}</pre>
       </el-card>
     </div>
   </div>
@@ -157,6 +273,8 @@ async function submit() {
 <style scoped>
 .publish { max-width: 800px; }
 .form { margin-top: 8px; }
+.upload-icon { font-size: 36px; color: var(--el-text-color-placeholder); }
+.filename { color: var(--el-color-success); margin-top: 4px; }
 .target-add { margin-bottom: 8px; }
 .target-add .el-button { margin-right: 6px; }
 .target-row { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
@@ -164,6 +282,7 @@ async function submit() {
 .results { margin-top: 24px; }
 .result-card { margin-bottom: 12px; }
 .result-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-.err { color: var(--el-color-danger); }
-pre { font-size: 12px; background: var(--el-fill-color-light); padding: 8px; border-radius: 4px; overflow: auto; }
+.stage-tag { margin-left: 8px; }
+.adapted { font-size: 13px; padding: 6px 0; color: var(--el-text-color-regular); }
+.err { color: var(--el-color-danger); font-size: 12px; background: var(--el-fill-color-light); padding: 8px; border-radius: 4px; }
 </style>

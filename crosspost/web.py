@@ -190,6 +190,15 @@ class GenerateMasterRequest(BaseModel):
     style_hint: str = ""
 
 
+class GenerateFromSubtitleRequest(BaseModel):
+    # Either subtitle_text (browser-side file read) or subtitle_path
+    # (already-uploaded server path) — at least one is required.
+    subtitle_text: str | None = None
+    subtitle_path: str | None = None
+    filename: str = ""
+    style_hint: str = ""
+
+
 @app.post("/api/ai/generate-master")
 async def ai_generate_master(req: GenerateMasterRequest) -> dict:
     if not req.topic.strip():
@@ -207,6 +216,48 @@ async def ai_generate_master(req: GenerateMasterRequest) -> dict:
         "title": data.get("title", ""),
         "description": data.get("description", ""),
         "tags": data.get("tags", []),
+    }
+
+
+@app.post("/api/ai/generate-from-subtitle")
+async def ai_generate_from_subtitle(req: GenerateFromSubtitleRequest) -> dict:
+    from utils.subtitle import parse_subtitle
+
+    raw: str | None = None
+    filename = req.filename
+    if req.subtitle_path:
+        path = Path(req.subtitle_path)
+        if not path.exists():
+            raise HTTPException(404, f"subtitle file not found: {path}")
+        try:
+            raw = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"could not read subtitle: {exc!r}")
+        filename = filename or path.name
+    elif req.subtitle_text:
+        raw = req.subtitle_text
+    if not raw or not raw.strip():
+        raise HTTPException(400, "subtitle_text or subtitle_path required")
+
+    parsed = parse_subtitle(raw, filename)
+    if not parsed.strip():
+        raise HTTPException(400, "subtitle parsed to empty — unsupported format?")
+
+    try:
+        from adapters.llm import ClaudeClient
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc))
+    try:
+        client = ClaudeClient()
+        data = await client.generate_master_from_subtitle(parsed, req.style_hint)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"LLM call failed: {exc!r}")
+    return {
+        "title": data.get("title", ""),
+        "description": data.get("description", ""),
+        "tags": data.get("tags", []),
+        "parsed_chars": len(parsed),
+        "parsed_preview": parsed[:200],
     }
 
 

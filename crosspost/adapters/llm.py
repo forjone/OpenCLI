@@ -88,6 +88,51 @@ class ClaudeClient:
         text = resp.content[0].text if resp.content else "{}"
         return _extract_json(text)
 
+    async def generate_master_from_subtitle(
+        self, subtitle_text: str, style_hint: str = ""
+    ) -> dict[str, Any]:
+        """Generate a master from the actual video content (subtitle / transcript).
+
+        Far more accurate than `generate_master(topic)` because the model
+        sees what's actually in the video.
+        """
+        MAX = 40_000  # ~13k tokens of Chinese — covers ~30 min of speech
+        truncated = False
+        if len(subtitle_text) > MAX:
+            subtitle_text = subtitle_text[:MAX]
+            truncated = True
+
+        system = (
+            "你是短视频文案策划。用户提供一条视频的完整字幕/逐字稿，"
+            '你帮他提炼一份"母版"文案。后续各平台 adapter 会再按平台风格'
+            "改写，所以这里你只需要写得通用、信息密度高、突出核心价值即可。\n\n"
+            "返回严格 JSON：\n"
+            '{"title": "≤30字，点出核心钩子或价值",\n'
+            ' "description": "≤200字，2-4 句话总结视频在讲什么、观众能收获什么",\n'
+            ' "tags": ["≤6 个核心关键词，不要 # 号"]}\n'
+            "JSON 之外不要输出任何文字。"
+        )
+        user = "字幕：\n" + subtitle_text
+        if truncated:
+            user += "\n…（字幕过长已截断，请基于前 40000 字概括）"
+        if style_hint:
+            user += f"\n\n风格倾向：{style_hint}"
+
+        resp = await self._client.messages.create(
+            model=self.model,
+            max_tokens=800,
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user}],
+        )
+        text = resp.content[0].text if resp.content else "{}"
+        return _extract_json(text)
+
 
 def _extract_json(text: str) -> dict[str, Any]:
     """Pull the first JSON object out of an LLM reply, tolerant of code fences."""

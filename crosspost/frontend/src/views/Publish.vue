@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled, MagicStick } from '@element-plus/icons-vue'
-import { fetchPlatforms, fetchAccounts, startPublish, subscribePublish, uploadFile, generateMaster } from '../api.js'
+import { fetchPlatforms, fetchAccounts, startPublish, subscribePublish, uploadFile, generateMaster, generateFromSubtitle } from '../api.js'
 
 const platforms = ref([])
 const accounts = ref([])
@@ -26,23 +26,52 @@ const uploading = ref(false)
 
 // AI generate-master dialog
 const aiOpen = ref(false)
+const aiMode = ref('subtitle')  // 'subtitle' (推荐) | 'topic'
 const aiTopic = ref('')
 const aiStyle = ref('')
 const aiBusy = ref(false)
+const aiSubtitleName = ref('')
+const aiSubtitleText = ref('')
+
+function pickSubtitle({ file }) {
+  aiSubtitleName.value = file.name
+  const reader = new FileReader()
+  reader.onload = (ev) => { aiSubtitleText.value = String(ev.target.result || '') }
+  reader.onerror = () => ElMessage.error('读取字幕失败')
+  reader.readAsText(file, 'utf-8')
+}
+
+function fillForm(data) {
+  form.title = data.title || form.title
+  form.description = data.description || form.description
+  form.tags = (data.tags && data.tags.length) ? data.tags.join(',') : form.tags
+}
 
 async function aiGenerate() {
-  if (!aiTopic.value.trim()) {
-    ElMessage.warning('描述一下视频内容')
-    return
-  }
   aiBusy.value = true
   try {
-    const data = await generateMaster(aiTopic.value, aiStyle.value)
-    form.title = data.title || form.title
-    form.description = data.description || form.description
-    form.tags = (data.tags && data.tags.length) ? data.tags.join(',') : form.tags
+    let data
+    if (aiMode.value === 'subtitle') {
+      if (!aiSubtitleText.value.trim()) {
+        ElMessage.warning('先选择字幕文件')
+        return
+      }
+      data = await generateFromSubtitle({
+        subtitle_text: aiSubtitleText.value,
+        filename: aiSubtitleName.value,
+        style_hint: aiStyle.value,
+      })
+      ElMessage.success(`已读取字幕 ${data.parsed_chars} 字，已填入`)
+    } else {
+      if (!aiTopic.value.trim()) {
+        ElMessage.warning('描述一下视频内容')
+        return
+      }
+      data = await generateMaster(aiTopic.value, aiStyle.value)
+      ElMessage.success('已填入，可继续微调')
+    }
+    fillForm(data)
     aiOpen.value = false
-    ElMessage.success('已填入，可继续微调')
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || 'AI 生成失败，检查 API key')
   } finally {
@@ -287,19 +316,40 @@ const progressList = computed(() => Object.values(progress.value))
       </el-form-item>
     </el-form>
 
-    <el-dialog v-model="aiOpen" title="✨ AI 生成母版" width="520px">
-      <el-form label-position="top">
-        <el-form-item label="视频主题 / 关键信息（必填）">
-          <el-input v-model="aiTopic" type="textarea" :rows="3"
-                    placeholder="例如：我用 N8N 搭了一个公众号自动推送 GitHub Trending 的工作流，完整教程" />
-        </el-form-item>
-        <el-form-item label="风格倾向（可选）">
-          <el-input v-model="aiStyle" placeholder="例如：偏教程 / 偏吐槽 / 偏故事" />
-        </el-form-item>
-        <el-alert type="info" :closable="false">
-          AI 会生成一份通用母版（标题/简介/标签），发布时再按各平台风格改写。
-        </el-alert>
-      </el-form>
+    <el-dialog v-model="aiOpen" title="✨ AI 生成母版" width="560px">
+      <el-tabs v-model="aiMode">
+        <el-tab-pane label="📝 从字幕文件（推荐）" name="subtitle">
+          <el-form label-position="top">
+            <el-form-item label="字幕文件">
+              <el-upload :http-request="pickSubtitle" :show-file-list="false"
+                         accept=".srt,.vtt,.ass,.ssa,.lrc,.txt">
+                <el-button>选择字幕文件</el-button>
+                <span v-if="aiSubtitleName" class="filename">已选：{{ aiSubtitleName }}（{{ aiSubtitleText.length }} 字）</span>
+              </el-upload>
+              <div class="hint">支持 .srt / .vtt / .ass / .ssa / .lrc / .txt。字幕在浏览器本地读取，不会单独上传。</div>
+            </el-form-item>
+            <el-form-item label="风格倾向（可选）">
+              <el-input v-model="aiStyle" placeholder="例如：偏教程 / 偏吐槽 / 偏故事" />
+            </el-form-item>
+            <el-alert type="success" :closable="false">
+              字幕是视频的真实内容，AI 基于它生成的母版比一句话主题精准得多。
+            </el-alert>
+          </el-form>
+        </el-tab-pane>
+
+        <el-tab-pane label="💬 一句话主题" name="topic">
+          <el-form label-position="top">
+            <el-form-item label="视频主题 / 关键信息">
+              <el-input v-model="aiTopic" type="textarea" :rows="3"
+                        placeholder="例如：我用 N8N 搭了一个公众号自动推送 GitHub Trending 的工作流，完整教程" />
+            </el-form-item>
+            <el-form-item label="风格倾向（可选）">
+              <el-input v-model="aiStyle" placeholder="例如：偏教程 / 偏吐槽 / 偏故事" />
+            </el-form-item>
+          </el-form>
+        </el-tab-pane>
+      </el-tabs>
+
       <template #footer>
         <el-button @click="aiOpen = false">取消</el-button>
         <el-button type="primary" :loading="aiBusy" @click="aiGenerate">生成并填入</el-button>

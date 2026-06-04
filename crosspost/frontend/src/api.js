@@ -9,6 +9,7 @@ export const startLogin     = (platform, account) => api.post('/login/start', { 
 export const doPublish      = (payload) => api.post('/publish', payload).then(r => r.data)
 export const startPublish   = (payload) => api.post('/publish/start', payload).then(r => r.data)
 export const generateMaster = (topic, style_hint = '') => api.post('/ai/generate-master', { topic, style_hint }).then(r => r.data)
+export const generateFromSubtitle = (payload) => api.post('/ai/generate-from-subtitle', payload).then(r => r.data)
 export const fetchSettings  = () => api.get('/settings').then(r => r.data)
 
 /**

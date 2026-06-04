@@ -1,8 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, reactive } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled } from '@element-plus/icons-vue'
-import { fetchPlatforms, fetchAccounts, startPublish, subscribePublish, uploadFile } from '../api.js'
+import { UploadFilled, MagicStick } from '@element-plus/icons-vue'
+import { fetchPlatforms, fetchAccounts, startPublish, subscribePublish, uploadFile, generateMaster } from '../api.js'
 
 const platforms = ref([])
 const accounts = ref([])
@@ -23,6 +23,32 @@ const form = reactive({
 
 const uploadProgress = ref(0)  // 0..1 for the video upload itself
 const uploading = ref(false)
+
+// AI generate-master dialog
+const aiOpen = ref(false)
+const aiTopic = ref('')
+const aiStyle = ref('')
+const aiBusy = ref(false)
+
+async function aiGenerate() {
+  if (!aiTopic.value.trim()) {
+    ElMessage.warning('描述一下视频内容')
+    return
+  }
+  aiBusy.value = true
+  try {
+    const data = await generateMaster(aiTopic.value, aiStyle.value)
+    form.title = data.title || form.title
+    form.description = data.description || form.description
+    form.tags = (data.tags && data.tags.length) ? data.tags.join(',') : form.tags
+    aiOpen.value = false
+    ElMessage.success('已填入，可继续微调')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || 'AI 生成失败，检查 API key')
+  } finally {
+    aiBusy.value = false
+  }
+}
 
 // publish progress: per "platform:account" key → { stage: 'adapt'|'upload', status: 'pending'|'running'|'done'|'fail', error?, result?, adapted? }
 const progress = ref({})
@@ -197,7 +223,13 @@ const progressList = computed(() => Object.values(progress.value))
         <el-progress v-if="uploading" :percentage="Math.round(uploadProgress * 100)" :stroke-width="6" />
       </el-form-item>
 
-      <el-form-item label="母版标题" required>
+      <el-form-item>
+        <template #label>
+          <span>母版标题</span>
+          <el-button size="small" link type="primary" @click="aiOpen = true" style="margin-left: 8px">
+            <el-icon><MagicStick /></el-icon>&nbsp;AI 生成母版
+          </el-button>
+        </template>
         <el-input v-model="form.title" />
       </el-form-item>
 
@@ -208,6 +240,11 @@ const progressList = computed(() => Object.values(progress.value))
       <el-form-item label="母版标签（逗号分隔）">
         <el-input v-model="form.tags" placeholder="标签1,标签2,标签3" />
       </el-form-item>
+
+      <el-alert type="info" :closable="false" style="margin-bottom: 16px">
+        母版是你的原始文案。发布时各平台的 AI adapter 会基于此重新改写
+        （抖音强钩子 / B站长描述 / 小红书 emoji / 视频号正经）。
+      </el-alert>
 
       <el-form-item label="封面（可选）">
         <el-upload :http-request="handleCoverUpload" :show-file-list="false"
@@ -249,6 +286,25 @@ const progressList = computed(() => Object.values(progress.value))
         <el-button type="primary" :loading="publishing" @click="submit">发布</el-button>
       </el-form-item>
     </el-form>
+
+    <el-dialog v-model="aiOpen" title="✨ AI 生成母版" width="520px">
+      <el-form label-position="top">
+        <el-form-item label="视频主题 / 关键信息（必填）">
+          <el-input v-model="aiTopic" type="textarea" :rows="3"
+                    placeholder="例如：我用 N8N 搭了一个公众号自动推送 GitHub Trending 的工作流，完整教程" />
+        </el-form-item>
+        <el-form-item label="风格倾向（可选）">
+          <el-input v-model="aiStyle" placeholder="例如：偏教程 / 偏吐槽 / 偏故事" />
+        </el-form-item>
+        <el-alert type="info" :closable="false">
+          AI 会生成一份通用母版（标题/简介/标签），发布时再按各平台风格改写。
+        </el-alert>
+      </el-form>
+      <template #footer>
+        <el-button @click="aiOpen = false">取消</el-button>
+        <el-button type="primary" :loading="aiBusy" @click="aiGenerate">生成并填入</el-button>
+      </template>
+    </el-dialog>
 
     <div v-if="progressList.length" class="results">
       <h3>进度</h3>

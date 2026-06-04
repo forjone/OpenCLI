@@ -56,6 +56,38 @@ class ClaudeClient:
         text = resp.content[0].text if resp.content else "{}"
         return _extract_json(text)
 
+    async def generate_master(self, topic: str, style_hint: str = "") -> dict[str, Any]:
+        """Generate a master VideoPost shell from a one-line topic.
+
+        Returns {title, description, tags} — the user then tweaks and the
+        per-platform adapter rewrites again at publish time.
+        """
+        system = (
+            "你是短视频文案策划。用户会给你一个主题，你需要为他生成一份"
+            '"母版"文案（这份文案后续还会被各平台 adapter 改写成抖音/B站'
+            "/小红书/视频号风格，所以这里你只需要写得通用、信息密度高、"
+            "突出价值点即可）。\n\n"
+            "返回严格 JSON：{\"title\": \"≤30字\", "
+            "\"description\": \"≤200字，1-3 句话讲清视频内容和价值\", "
+            "\"tags\": [\"≤6 个核心关键词，不要 # 号\"]}\n"
+            "JSON 之外不要输出任何文字。"
+        )
+        user = f"主题：{topic}\n风格倾向：{style_hint or '通用'}"
+        resp = await self._client.messages.create(
+            model=self.model,
+            max_tokens=800,
+            system=[
+                {
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user}],
+        )
+        text = resp.content[0].text if resp.content else "{}"
+        return _extract_json(text)
+
 
 def _extract_json(text: str) -> dict[str, Any]:
     """Pull the first JSON object out of an LLM reply, tolerant of code fences."""

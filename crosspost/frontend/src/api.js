@@ -8,6 +8,8 @@ export const fetchPosts     = (limit = 50) => api.get('/posts', { params: { limi
 export const startLogin     = (platform, account) => api.post('/login/start', { platform, account }).then(r => r.data)
 export const doPublish      = (payload) => api.post('/publish', payload).then(r => r.data)
 export const startPublish   = (payload) => api.post('/publish/start', payload).then(r => r.data)
+export const generateMaster = (topic, style_hint = '') => api.post('/ai/generate-master', { topic, style_hint }).then(r => r.data)
+export const fetchSettings  = () => api.get('/settings').then(r => r.data)
 
 /**
  * Upload a single file (video or cover). `onProgress(0..1)` receives

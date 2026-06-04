@@ -183,6 +183,54 @@ async def login_stream(task_id: str) -> StreamingResponse:
 
 # ---------- publish ----------
 
+# ---------- AI helpers ----------
+
+class GenerateMasterRequest(BaseModel):
+    topic: str
+    style_hint: str = ""
+
+
+@app.post("/api/ai/generate-master")
+async def ai_generate_master(req: GenerateMasterRequest) -> dict:
+    if not req.topic.strip():
+        raise HTTPException(400, "topic is required")
+    try:
+        from adapters.llm import ClaudeClient
+    except RuntimeError as exc:
+        raise HTTPException(500, str(exc))
+    try:
+        client = ClaudeClient()
+        data = await client.generate_master(req.topic, req.style_hint)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(502, f"LLM call failed: {exc!r}")
+    return {
+        "title": data.get("title", ""),
+        "description": data.get("description", ""),
+        "tags": data.get("tags", []),
+    }
+
+
+# ---------- settings ----------
+
+@app.get("/api/settings")
+def settings() -> dict:
+    import os
+    from conf import LLM_MODEL  # may not be present in older conf.py
+
+    prompts_dir = Path(__file__).parent / "adapters" / "prompts"
+    prompt_files = [
+        {"platform": p.stem, "path": str(p), "exists": p.exists()}
+        for p in sorted(prompts_dir.glob("*.md"))
+    ]
+    return {
+        "has_api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "model": LLM_MODEL,
+        "cookies_dir": str(COOKIES_DIR),
+        "data_dir": str(DATA_DIR),
+        "prompt_files": prompt_files,
+    }
+
+
 # ---------- file uploads ----------
 
 @app.post("/api/uploads")

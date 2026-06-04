@@ -11,6 +11,7 @@ const route = useRoute()
         <el-menu-item index="/publish">发布</el-menu-item>
         <el-menu-item index="/accounts">账号</el-menu-item>
         <el-menu-item index="/history">历史</el-menu-item>
+        <el-menu-item index="/settings">设置</el-menu-item>
       </el-menu>
     </el-header>
     <el-main>
